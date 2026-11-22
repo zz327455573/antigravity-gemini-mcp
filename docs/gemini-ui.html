@@ -55,31 +55,31 @@
       <div class="topbar">
         <span class="gemhead">G</span>
         <span class="brand">Gemini</span>
-        <span class="plug">Antigravity MCP 已连接</span>
+        <span class="plug">Antigravity MCP Connected</span>
       </div>
       <div class="chat">
-        <div class="bubble user">查一下 Next.js 16 的中间件改动，让反重力把这个更新到我的 D:\wenda 项目里</div>
+        <div class="bubble user">Check Next.js 16 middleware changes and ask Antigravity to migrate D:\projects\saas-web</div>
         <div class="bubble ai">
-          <span style="display:inline-flex;align-items:center;gap:6px;color:#8df3b0;font-size:11px;font-weight:600;margin-bottom:5px">✓ Antigravity 已执行 · 用时 42s</span><br>
-          已完成 2 处中间件迁移：
-          <div class="diff">─ old: createProxyMiddleware()
-          + new: stableMiddleware()
-          ✔ 构建通过 · build/test ✓</div>
+          <span style="display:inline-flex;align-items:center;gap:6px;color:#8df3b0;font-size:11px;font-weight:600;margin-bottom:5px">✓ Antigravity finished · 42s</span><br>
+          Migrated 2 middleware entrypoints:
+          <div class="diff">- old: createProxyMiddleware()
++ new: proxyHandler()
+✔ build &amp; typecheck passed ✓</div>
         </div>
         <div class="bubble ai" style="display:flex;flex-direction:column;gap:4px">
-          <span style="color:#aab2ff;font-size:11px;font-weight:600">📎 你可以在云电脑查看完整 diff</span>
+          <span style="color:#aab2ff;font-size:11px;font-weight:600">📎 Tool calls executed on your Windows host</span>
           <span class="tooltag"><span class="ti">⚙</span>create_and_send_task</span>
           <span class="tooltag"><span class="ti">📄</span>read_file_snippet: 3 files</span>
-          <span class="tooltag"><span class="ti">🔧</span>run_windows_cmd</span>
+          <span class="tooltag"><span class="ti">📂</span>list_files: src/</span>
         </div>
       </div>
       <div class="inputbar">
-        <span class="field">继续向 Antigravity 派任务…</span>
+        <span class="field">Dispatch next task to Antigravity…</span>
         <span class="btn">➤</span>
       </div>
     </div>
   </div>
-  <div class="cap">手机 Gemini 一个对话完成：检索 ➜ 派单 ➜ 执行 ➜ 看 diff</div>
+  <div class="cap">Gemini App: Search web ➜ Dispatch ➜ Inspect diff in one thread</div>
 </div>
 
 <div class="arrow">➜</div>
@@ -91,36 +91,36 @@
       <div class="status"><span>—</span><span>LOCAL</span></div>
       <div class="topbar">
         <span class="icn" style="width:26px;height:26px;border-radius:8px;background:#2a2e45;display:flex;align-items:center;justify-content:center;font-size:13px">🖥️</span>
-        <span class="brand">Windows 云电脑</span>
-        <span class="plug" style="color:#8df3b0">运行中</span>
+        <span class="brand">Windows Workstation</span>
+        <span class="plug" style="color:#8df3b0">Online</span>
       </div>
       <div class="host">
         <div class="hcard">
-          <div class="h"><span class="icn" style="background:#17253d">🔌</span><span class="tt">Antigravity Gemini MCP 网关</span><span class="st">●</span></div>
+          <div class="h"><span class="icn" style="background:#17253d">🔌</span><span class="tt">Antigravity Gemini MCP Bridge</span><span class="st">●</span></div>
           <div style="color:#6b7288;font-size:11px">gateway.py + mcp_bridge.py · 127.0.0.1:18900</div>
         </div>
         <div class="hcard">
           <div class="h"><span class="icn" style="background:#1b2140">🤖</span><span class="tt">agentapi.bat</span><span class="st">●</span></div>
-          <div style="color:#6b7288;font-size:11px">本地 Antigravity 会话桥 · 你的订阅额度</div>
+          <div style="color:#6b7288;font-size:11px">Local Antigravity RPC · Uses your own plan</div>
         </div>
         <div class="hcard">
-          <div class="h"><span class="icn" style="background:#17253d">📂</span><span class="tt"><span style="color:#dfe2f5">D:\wenda\</span></span><span class="st">●</span></div>
-          <div style="color:#6b7288;font-size:11px">28 个文件 · 可读可写 · 远程代码改动落地</div>
+          <div class="h"><span class="icn" style="background:#17253d">📂</span><span class="tt"><span style="color:#dfe2f5">D:\projects\saas-web\</span></span><span class="st">●</span></div>
+          <div style="color:#6b7288;font-size:11px">28 files · Read/Write · Direct workspace edits</div>
         </div>
         <div class="kpis">
-          <div class="kp"><div class="n">42s</div><div class="l">任务耗时</div></div>
-          <div class="kp"><div class="n">2</div><div class="l">文件改动</div></div>
-          <div class="kp"><div class="n">0</div><div class="l">权限待审</div></div>
+          <div class="kp"><div class="n">42s</div><div class="l">Duration</div></div>
+          <div class="kp"><div class="n">2</div><div class="l">Files edited</div></div>
+          <div class="kp"><div class="n">0</div><div class="l">Pending</div></div>
         </div>
         <div class="hcard" style="background:linear-gradient(135deg,#1c2044,#232a5e);border:1px solid #4f5bd5">
-          <div class="h"><span class="icn" style="background:#4f5bd5">✦</span><span class="tt" style="color:#c8d0ff">云电脑 Antigravity 实况</span><span class="st2">● 健康</span></div>
-          <div style="color:#aab2ff;font-size:11px;line-height:1.6">✓ OAuth 2.1 + PKCE 已握手<br>✓ Streamable HTTP 正常<br>✓ 9 个 MCP 工具在线</div>
+          <div class="h"><span class="icn" style="background:#4f5bd5">✦</span><span class="tt" style="color:#c8d0ff">Host Bridge Status</span><span class="st2">● Healthy</span></div>
+          <div style="color:#aab2ff;font-size:11px;line-height:1.6">✓ OAuth 2.1 + PKCE verified<br>✓ Streamable HTTP active<br>✓ 9 MCP tools exposed</div>
         </div>
-        <div class="footer">手机端零安装 · 你只是用了一个现成的 Gemini</div>
+        <div class="footer">Zero mobile install · Drive local IDE from Gemini</div>
       </div>
     </div>
   </div>
-  <div class="cap">本地 Windows 网关 · 9 个 MCP 工具 · OAuth 2.1 认证</div>
+  <div class="cap">Local Windows Gateway · 9 MCP Tools · OAuth 2.1</div>
 </div>
 
 </body>
