@@ -25,6 +25,12 @@ Nothing to install on the phone. Nothing to host for the client. Just one HTTPS 
 
 ## What it looks like in practice
 
+![Gemini drives your Antigravity](docs/gemini-ui.png)
+
+*One conversation where Gemini searches the web, dispatches the task, and shows you the diff — an IDE-only remote can't do that.*
+
+## How the pieces connect
+
 ![Architecture](docs/architecture.svg)
 
 ```

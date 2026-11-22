@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Antigravity via Gemini — Interface</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#1a1b26; display:flex; gap:36px; justify-content:center; align-items:center; min-height:100vh; font-family:-apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding:40px 20px; }
+  .wrap { display:flex; flex-direction:column; align-items:center; gap:12px; }
+  .wrap .cap { color:#a9b1d6; font-size:13px; font-weight:600; }
+  .arrow { color:#4f5bd5; font-size:30px; align-self:center; margin-top:60px; }
+  .phone { background:#0d0e14; border-radius:40px; padding:12px; box-shadow:0 24px 60px rgba(0,0,0,.55), inset 0 0 0 2px #2a2c3d; width:330px; }
+  .notch { width:110px; height:24px; background:#0d0e14; border-radius:0 0 16px 16px; margin:-12px auto 8px; border:2px solid #2a2c3d; border-top:none; }
+  .app { background:#12131c; border-radius:28px; overflow:hidden; height:620px; display:flex; flex-direction:column; }
+  .status { display:flex; justify-content:space-between; padding:6px 18px; font-size:10px; color:#5a6085; }
+  .topbar { display:flex; align-items:center; gap:10px; padding:12px 16px; }
+  .gemhead { width:26px; height:26px; border-radius:50%; background:linear-gradient(135deg,#4f5bd5,#7d8dff); display:flex; align-items:center; justify-content:center; color:#fff; font-size:13px; }
+  .topbar .brand { font-size:14px; font-weight:700; color:#e8eaf6; flex:1; }
+  .topbar .plug { font-size:10px; font-weight:700; color:#8df3b0; background:#16291f; border:1px solid #2b5d40; border-radius:20px; padding:3px 9px; }
+  /* Gemini chat */
+  .chat { flex:1; overflow:hidden; padding:10px 12px; display:flex; flex-direction:column; gap:10px; }
+  .bubble { max-width:84%; padding:9px 12px; border-radius:16px; font-size:12px; line-height:1.5; }
+  .bubble.user { align-self:flex-end; background:#2f344a; border-bottom-right-radius:4px; color:#e8eaf6; }
+  .bubble.ai { align-self:flex-start; background:#1d2032; border-bottom-left-radius:4px; color:#d7daee; }
+  .tooltag { display:inline-flex; align-items:center; gap:5px; background:#1c1f31; border:1px solid #3a3f60; border-radius:12px; padding:5px 9px; font-size:10px; color:#aab2ff; margin:3px 2px 0 0; }
+  .tooltag .ti { background:#4f5bd5; border-radius:6px; width:16px; height:16px; font-size:9px; display:inline-flex; align-items:center; justify-content:center; color:#fff; }
+  .diff { font-family:ui-monospace, Menlo, Consolas, monospace; font-size:10px; background:#0d0f18; border-radius:10px; padding:8px 10px; margin-top:7px; color:#8df3b0; white-space:pre; overflow:hidden; }
+  .inputbar { display:flex; align-items:center; gap:8px; padding:10px 14px; border-top:1px solid #1e2130; }
+  .inputbar .field { flex:1; background:#1b1d2e; border-radius:22px; padding:8px 14px; font-size:12px; color:#8d93b0; }
+  .inputbar .btn { width:28px; height:28px; border-radius:50%; background:#4f5bd5; color:#fff; font-size:13px; display:flex; align-items:center; justify-content:center; }
+  /* host card */
+  .host { flex:1; padding:12px; display:flex; flex-direction:column; gap:10px; }
+  .hcard { background:#161722; border-radius:16px; padding:13px 14px; border:1px solid #232639; }
+  .hcard .h { display:flex; align-items:center; gap:9px; margin-bottom:8px; }
+  .hcard .icn { width:26px; height:26px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:13px; }
+  .hcard .h .tt { flex:1; color:#dfe2f5; font-size:12.5px; font-weight:700; }
+  .hcard .h .st { color:#8df3b0; font-size:10.5px; }
+  .hcard .vention { color:#aab2ff; font-weight:700; font-size:13px; margin-bottom:2px; }
+  .hcard .h .st2 { color:#8df3b0; font-size:10.5px; background:#16291f; border:1px solid #2b5d40; padding:2px 7px; border-radius:20px; }
+  .kpis { display:flex; gap:8px; margin:10px 0 2px; }
+  .kp { flex:1; background:#1a1c2c; border-radius:12px; padding:9px 10px; }
+  .kp .n { color:#e8eaf6; font-size:15px; font-weight:700; }
+  .kp .l { color:#61688c; font-size:9.5px; margin-top:2px; }
+  .footer { color:#5a6085; font-size:9.5px; text-align:center; padding:4px 0 2px; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <div class="phone">
+    <div class="notch"></div>
+    <div class="app">
+      <div class="status"><span>9:41</span><span>▲ 5G 98%</span></div>
+      <div class="topbar">
+        <span class="gemhead">G</span>
+        <span class="brand">Gemini</span>
+        <span class="plug">Antigravity MCP 已连接</span>
+      </div>
+      <div class="chat">
+        <div class="bubble user">查一下 Next.js 16 的中间件改动，让反重力把这个更新到我的 D:\wenda 项目里</div>
+        <div class="bubble ai">
+          <span style="display:inline-flex;align-items:center;gap:6px;color:#8df3b0;font-size:11px;font-weight:600;margin-bottom:5px">✓ Antigravity 已执行 · 用时 42s</span><br>
+          已完成 2 处中间件迁移：
+          <div class="diff">─ old: createProxyMiddleware()
+          + new: stableMiddleware()
+          ✔ 构建通过 · build/test ✓</div>
+        </div>
+        <div class="bubble ai" style="display:flex;flex-direction:column;gap:4px">
+          <span style="color:#aab2ff;font-size:11px;font-weight:600">📎 你可以在云电脑查看完整 diff</span>
+          <span class="tooltag"><span class="ti">⚙</span>create_and_send_task</span>
+          <span class="tooltag"><span class="ti">📄</span>read_file_snippet: 3 files</span>
+          <span class="tooltag"><span class="ti">🔧</span>run_windows_cmd</span>
+        </div>
+      </div>
+      <div class="inputbar">
+        <span class="field">继续向 Antigravity 派任务…</span>
+        <span class="btn">➤</span>
+      </div>
+    </div>
+  </div>
+  <div class="cap">手机 Gemini 一个对话完成：检索 ➜ 派单 ➜ 执行 ➜ 看 diff</div>
+</div>
+
+<div class="arrow">➜</div>
+
+<div class="wrap">
+  <div class="phone">
+    <div class="notch"></div>
+    <div class="app">
+      <div class="status"><span>—</span><span>LOCAL</span></div>
+      <div class="topbar">
+        <span class="icn" style="width:26px;height:26px;border-radius:8px;background:#2a2e45;display:flex;align-items:center;justify-content:center;font-size:13px">🖥️</span>
+        <span class="brand">Windows 云电脑</span>
+        <span class="plug" style="color:#8df3b0">运行中</span>
+      </div>
+      <div class="host">
+        <div class="hcard">
+          <div class="h"><span class="icn" style="background:#17253d">🔌</span><span class="tt">Antigravity Gemini MCP 网关</span><span class="st">●</span></div>
+          <div style="color:#6b7288;font-size:11px">gateway.py + mcp_bridge.py · 127.0.0.1:18900</div>
+        </div>
+        <div class="hcard">
+          <div class="h"><span class="icn" style="background:#1b2140">🤖</span><span class="tt">agentapi.bat</span><span class="st">●</span></div>
+          <div style="color:#6b7288;font-size:11px">本地 Antigravity 会话桥 · 你的订阅额度</div>
+        </div>
+        <div class="hcard">
+          <div class="h"><span class="icn" style="background:#17253d">📂</span><span class="tt"><span style="color:#dfe2f5">D:\wenda\</span></span><span class="st">●</span></div>
+          <div style="color:#6b7288;font-size:11px">28 个文件 · 可读可写 · 远程代码改动落地</div>
+        </div>
+        <div class="kpis">
+          <div class="kp"><div class="n">42s</div><div class="l">任务耗时</div></div>
+          <div class="kp"><div class="n">2</div><div class="l">文件改动</div></div>
+          <div class="kp"><div class="n">0</div><div class="l">权限待审</div></div>
+        </div>
+        <div class="hcard" style="background:linear-gradient(135deg,#1c2044,#232a5e);border:1px solid #4f5bd5">
+          <div class="h"><span class="icn" style="background:#4f5bd5">✦</span><span class="tt" style="color:#c8d0ff">云电脑 Antigravity 实况</span><span class="st2">● 健康</span></div>
+          <div style="color:#aab2ff;font-size:11px;line-height:1.6">✓ OAuth 2.1 + PKCE 已握手<br>✓ Streamable HTTP 正常<br>✓ 9 个 MCP 工具在线</div>
+        </div>
+        <div class="footer">手机端零安装 · 你只是用了一个现成的 Gemini</div>
+      </div>
+    </div>
+  </div>
+  <div class="cap">本地 Windows 网关 · 9 个 MCP 工具 · OAuth 2.1 认证</div>
+</div>
+
+</body>
+</html>
