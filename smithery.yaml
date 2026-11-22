@@ -1,0 +1,10 @@
+name: antigravity-gemini-mcp
+description: >-
+  Expose your local Google Antigravity IDE as a remote MCP server and drive it
+  from the Gemini app — task dispatch, monitoring and file reads, zero client
+  install. Streamable HTTP, OAuth 2.1 + PKCE.
+categories:
+  - tools
+  - productivity
+license: MIT
+repository: https://github.com/zz327455573/antigravity-gemini-mcp

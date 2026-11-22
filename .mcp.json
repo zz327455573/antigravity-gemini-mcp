@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "antigravity-gemini-mcp": {
+      "command": "python",
+      "args": ["server/gateway.py"],
+      "env": {
+        "AGY_MCP_CONFIG": "./server/config.json"
+      }
+    }
+  }
+}
