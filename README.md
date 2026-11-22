@@ -25,6 +25,8 @@ Nothing to install on the phone. Nothing to host for the client. Just one HTTPS 
 
 ## What it looks like in practice
 
+![Architecture](docs/architecture.svg)
+
 ```
   Phone: Gemini app  ──►  Gemini cloud  ──►  your HTTPS endpoint
                                               │ (OAuth 2.1 + PKCE)
