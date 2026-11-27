@@ -1,53 +1,87 @@
 # Antigravity Gemini MCP
 
-**Drive your Antigravity IDE from the Gemini app you already have on your phone. No app to install, no browser tab to keep open.**
+**Drive your local Google Antigravity IDE from the Gemini app already on your phone — zero app install, zero timeout disconnects, automatic retry recovery.**
 
+[![Version](https://img.shields.io/badge/version-v1.1.0-10b981)](#whats-new-in-v110--built-for-real-mobile-networks)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![MCP](https://img.shields.io/badge/MCP-Streamable%20HTTP-6f42c1)](#)
+[![MCP](https://img.shields.io/badge/MCP-Streamable%20HTTP-6f42c1)](#11-mcp-tools)
 [![OAuth](https://img.shields.io/badge/OAuth-2.1%20%2B%20PKCE-blue)](#authentication)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)](#requirements)
 
----
+> **[中文文档 (README.zh-CN.md)](README.zh-CN.md)** · Companion native Android client: **[antigravity-remote](https://github.com/zz327455573/antigravity-remote)**
 
-## The idea
-
-Every mobile remote for a coding agent builds its own UI. That is a lot of work, and you end up with a second place to type.
-
-This project does the opposite: it **exposes your local Antigravity as a standard remote MCP server**, and lets **Gemini be the UI**. You open Gemini — the app already on your phone — and say:
-
-> *"Search what changed in Next.js 16 middleware, then have Antigravity apply it to my project and show me the diff."*
-
-Gemini's own search, reasoning and the Antigravity session all run **in one conversation**. That is something a browser-based IDE remote cannot do, because it only shows you the IDE.
-
-Nothing to install on the phone. Nothing to host for the client. Just one HTTPS URL.
+![Antigravity Gemini MCP](docs/hero-banner.jpg)
 
 ---
 
-## What it looks like in practice
+## The Idea
 
-![Gemini drives your Antigravity](docs/gemini-ui.png)
+Every mobile remote for a coding agent builds its own chat UI. That means maintaining another frontend, another login, and losing the context of your main AI assistant.
 
-*One conversation where Gemini searches the web, dispatches the task, and shows you the diff — an IDE-only remote can't do that.*
+This project flips the pattern: it **exposes your local Google Antigravity IDE as a standard remote MCP server** and lets **the Gemini app be the UI**. Open Gemini on your phone or desktop and say:
 
-## How the pieces connect
+> *"Search what changed in Next.js 16 middleware, then have Antigravity apply it to my project, run the tests, and show me the diff."*
 
-![Architecture](docs/architecture.svg)
+Gemini's web search, reasoning, voice input, and your local Antigravity IDE all run **in a single conversation**.
 
-```
-  Phone: Gemini app  ──►  Gemini cloud  ──►  your HTTPS endpoint
-                                              │ (OAuth 2.1 + PKCE)
-                                              ▼
-                                     gateway.py + mcp_bridge.py
-                                              │  :18900
-                                              ▼
-                                  agentapi.bat → Antigravity IDE
-                                              │
-                                        your files on disk
-```
+- **Zero install on your phone** — works inside the official Gemini app via Google's custom MCP connector.
+- **No cloud PC required** — runs on any Windows machine you leave powered on.
+- **Battle-tested for mobile networks (v1.1.0)** — 25-second hard-capped receipts + 180-second fingerprint deduplication prevent client disconnects and duplicate sessions.
 
-- 9 MCP tools: `list_projects`, `list_conversations`, `check_server_health`, `create_and_send_task`, `send_message`, `get_task_result`, `stop_task`, `list_files`, `read_file_snippet`
-- Sync mode for tasks under 50 s (`wait_seconds=45`), async mode for long jobs (`wait_seconds=0` → returns `conversation_id`, then poll `get_task_result` with `offset` / `max_chars`)
-- Multi-window routing by `project_path`, plus newline folding so `cmd /c agentapi.bat` does not truncate multi-line prompts
+---
+
+## Live Workflow Demo
+
+![Live Workflow Demo](docs/demo.gif)
+
+*Speak or type on Gemini mobile → OAuth 2.1 Remote MCP → local Antigravity IDE edits files, runs tests, and streams the result back into the same Gemini thread.*
+
+---
+
+## What's New in v1.1.0 — Built for Real Mobile Networks
+
+Mobile MCP clients and cloud proxies silently drop connections if a tool call hangs for 50–60 seconds — and tapping **Retry** in naive implementations spawns duplicate coding sessions. **v1.1.0 solves both permanently:**
+
+![v1.1.0 Anti-Timeout & Auto-Resume](docs/v110-anti-timeout.jpg)
+
+1. **25s Hard-Capped Receipts (`MAX_TOTAL_WAIT_SEC = 25`)**
+   - Total request time (task dispatch + status polling) is strictly capped at **25 seconds**.
+   - If the task finishes within 25s, you get the complete final output in one turn.
+   - If it is still running at 25s (or dispatch alone took most of the budget), the gateway immediately returns a structured receipt (`ok: true`, `status: "running"`, `conversation_id`, `is_running`, `total_steps`, `recent_tools`) before any client or proxy timeout can fire.
+2. **180s Fingerprint Dedup & Auto-Resume (`DEDUP_TTL_SEC = 180`)**
+   - `create_and_send_task` and `send_message` maintain an in-memory SHA-256 fingerprint cache guarded by an `asyncio.Lock` and concurrent `pending` coalescing.
+   - Retrying the same request within **180 seconds** never spawns a second session or duplicate message — it automatically claims the existing `conversation_id` (`"deduplicated": true`), resumes polling with the remaining budget, or returns the finished result immediately.
+
+---
+
+## Dual-Channel Ecosystem
+
+One lightweight local FastAPI gateway (`127.0.0.1:18900`) powers **both** mobile workflows side by side:
+
+![Dual-Channel Ecosystem](docs/dual-channel-ecosystem.png)
+
+- **[antigravity-gemini-mcp](https://github.com/zz327455573/antigravity-gemini-mcp)** (this repo) — zero-install remote MCP endpoint (`/mcp`) for Gemini Mobile/Web or any OAuth 2.1 MCP client.
+- **[antigravity-remote](https://github.com/zz327455573/antigravity-remote)** — native Android client (`/api/*`) when you also want **full-disk file browsing (`C:\`, `D:\`)**, **two-way file transfers**, **resumable background downloads**, and **live model quota switching**.
+
+---
+
+## 11 MCP Tools
+
+| Tool | Purpose | Key Parameters |
+|---|---|---|
+| `list_projects` | Discover Antigravity workspace directories | `keyword` (optional) |
+| `create_project` | Create a new workspace folder under `workspace_roots` | `name`, `root_path` (optional) |
+| `list_conversations` | List recent conversations with live status | `limit` (default 20, max 80) |
+| `create_and_send_task` | Create a session & dispatch a task (180s dedup + 25s cap) | `prompt`, `project_path`, `title`, `model` (`default`/`fast`/`strong`), `wait_seconds` (`0–25`) |
+| `send_message` | Send a follow-up prompt (180s dedup + 25s cap) | `conversation_id`, `content`, `model`, `wait_seconds` (`0–25`) |
+| `get_task_result` | Poll live status & read chunked response | `conversation_id`, `offset`, `max_chars`, `wait_seconds` (`0–25`) |
+| `stop_task` | Cancel a running conversation & confirm IDLE | `conversation_id` |
+| `list_files` | List files and subdirectories on the host | `path` |
+| `read_file_snippet` | Read up to 200 lines of a text file | `path`, `start_line`, `end_line` |
+| `search_in_files` | Fast case-insensitive text search across a folder/file | `path`, `query`, `file_ext`, `max_results` |
+| `check_server_health` | Inspect active `hub_*.json` instances, PIDs, ports & running tasks | `detail` |
+
+- **Multi-window routing** by `project_path` (`hub_*.json` RPC + `agentapi.bat`), plus automatic newline folding so `cmd /c agentapi.bat` never truncates multi-line prompts.
 
 ---
 
@@ -55,14 +89,15 @@ Nothing to install on the phone. Nothing to host for the client. Just one HTTPS 
 
 | | Google Remote Control | **This (MCP bridge)** |
 |---|---|---|
-| Where you type | Antigravity's own web UI | **Gemini — search, reasoning, tools, same thread** |
-| Install on phone | add to home screen | **nothing** |
-| Can combine web research + code change in one turn | — | ✅ |
-| Can read files off the host | — | ✅ `list_files` / `read_file_snippet` |
+| Where you type | Antigravity's own web UI | **Gemini — search, voice, reasoning, tools, same thread** |
+| Install on phone | Add to home screen | **Nothing** |
+| Combine web research + code change in 1 turn | — | ✅ |
+| Read & search files directly off host | — | ✅ `list_files` / `read_file_snippet` / `search_in_files` |
+| Mobile timeout & retry protection | Built-in web socket | ✅ **25s hard-cap receipts + 180s dedup auto-resume** |
 | Access surface | Google's own client | Google's **officially supported** custom MCP connector |
-| Setup | zero | self-hosted gateway + HTTPS endpoint |
+| Setup | Zero | Self-hosted gateway + HTTPS endpoint (~3 min) |
 
-The two are complementary. Many people will run both: MCP bridge for "think + dispatch", official Remote Control for "review the diff in the real IDE UI".
+The two are complementary: use the **MCP bridge** for *"think + research + dispatch from Gemini"*, and **Remote Control** or **Antigravity Remote APK** for inspecting full diffs and transferring build artifacts.
 
 ---
 
@@ -70,28 +105,28 @@ The two are complementary. Many people will run both: MCP bridge for "think + di
 
 | Side | Needs |
 |---|---|
-| Windows host | Windows 10/11, Python 3.9+, Antigravity IDE running |
-| Phone | The Gemini app (or gemini.google.com) |
-| Network | **Public HTTPS domain with a trusted CA certificate** — Gemini's backend will not reach a self-signed cert or a local address |
-| Optional | A domain on Cloudflare (recommended for a stable tunnel URL) |
+| Windows host | Windows 10/11, Python 3.9+, Google Antigravity IDE running |
+| Phone | The Gemini app (or `gemini.google.com`) |
+| Network | **Public HTTPS domain with a trusted CA certificate** — Gemini's backend rejects self-signed certs and plain HTTP |
+| Optional | A domain on Cloudflare (free named tunnel for a permanent URL) |
 
 ---
 
 ## Authentication
 
-No shared secret is typed into Gemini. The bridge speaks real **OAuth 2.1**:
+No shared secret is pasted into Gemini. The bridge implements full **OAuth 2.1**:
 
-- `/.well-known/oauth-protected-resource`
-- `/.well-known/oauth-authorization-server`
-- PKCE + **RFC 7591 dynamic client registration**
+- `/.well-known/oauth-protected-resource` (RFC 9728)
+- `/.well-known/oauth-authorization-server` (RFC 8414)
+- **PKCE (`S256` / `plain`)** + **RFC 7591 Dynamic Client Registration**
 
-Token lifetimes: access **30 days**, refresh **180 days**. The authorization page simply asks for the `auth_token` you put in `config.json` — that string is the only credential, so make it long.
+Token lifetimes: access **30 days**, refresh **180 days**. During authorization, the consent page verifies the `auth_token` from your local `server/config.json` — make it long and random.
 
 ---
 
-## Quick start
+## Quick Start (3 Steps)
 
-### 1. Host
+### 1. Start the Local Gateway
 
 ```bash
 cd server
@@ -111,90 +146,52 @@ Edit `server/config.json`:
 }
 ```
 
-Start Antigravity IDE, then:
+Open Antigravity IDE, then start the gateway:
 
 ```bash
 python gateway.py
 ```
 
-Optional silent keepalive: `watch_gateway.py`, `watch_cloudflared.py`, `launch_hidden.vbs`, or a scheduled task.
+*(Optional silent Win32 background watchdogs with zero console windows: `watch_gateway.py`, `watch_cloudflared.py`, `launch_hidden.vbs`.)*
 
-### 2. Public HTTPS endpoint
+### 2. Expose a Public HTTPS Endpoint
 
 ```bash
-cloudflared tunnel --url http://127.0.0.1:18900          # quick test (random URL)
-cloudflared tunnel run agy-remote                        # named tunnel + your domain
+cloudflared tunnel --url http://127.0.0.1:18900   # Quick test (random URL)
+cloudflared tunnel run agy-remote                 # Named tunnel + your domain (recommended)
 ```
 
-A named tunnel with your own domain is strongly preferred — the MCP connection stores the URL, and a random `trycloudflare.com` host changes on every restart.
+A named tunnel on your own domain is strongly recommended — Gemini stores the connector URL, whereas a temporary `trycloudflare.com` URL changes on restart.
 
 ### 3. Connect Gemini
 
 1. Open **gemini.google.com** → Settings → **Connected Apps** → **Add a custom app**
-2. Paste `https://your-domain.com/mcp`
-3. Approve the OAuth page (enter your `auth_token`)
-4. Once added there, the connector also appears in the **Gemini mobile app**
-
-Then just talk to it. Ask for a task, or ask it to check `list_conversations` first.
+2. Enter `https://your-domain.example.com/mcp`
+3. Complete the OAuth authorization page using your `auth_token`
+4. The connector immediately syncs to your **Gemini mobile app**
 
 ---
 
 ## FAQ
 
-**Does this need a cloud PC?**
-No. Any Windows machine that stays powered on — a desktop, a mini PC, a laptop. The only hard requirement is a public HTTPS endpoint.
+**Does this need a cloud PC?**  
+No. Any Windows machine left powered on works — a home desktop, mini PC, or laptop.
 
-**Why HTTPS with a real certificate?**
-Gemini's servers call your endpoint from the public internet. Self-signed certificates and plain HTTP are rejected by design. Cloudflare Tunnel gives you a valid cert for free.
+**Why does Gemini require a real HTTPS certificate?**  
+Gemini's cloud backend invokes your `/mcp` endpoint over the public internet and rejects plain HTTP or self-signed certificates. Cloudflare Tunnel provisions a valid TLS cert for free.
 
-**Is my Antigravity account involved?**
-The agent runs locally inside Antigravity with your normal quota. This bridge does not move your Antigravity credentials anywhere; Gemini authenticates to *your* bridge via OAuth. Access to Antigravity itself is through Google's supported custom-MCP surface.
+**Can a remote task break the MCP connection?**  
+Yes — if you instruct a Gemini-dispatched session to edit or restart `gateway.py` or `mcp_bridge.py` directly, restarting the process drops its own live connection. Keep those two files out of remote self-modification scope unless explicitly restarting via an external watchdog.
 
-**Can a remote task brick the connection?**
-Yes — if you ask a Gemini-dispatched session to edit or restart `gateway.py` / `mcp_bridge.py`, it kills its own link. Keep those two files out of remote scope.
-
-**Only Gemini?**
-The server is a standard Streamable HTTP MCP with OAuth discovery, so any MCP client that supports remote servers can connect — Claude, Cursor, and others. Gemini is simply the one that needs no extra app on your phone.
+**Only Gemini?**  
+No — `/mcp` is standard Streamable HTTP MCP with OAuth 2.1 discovery, so Claude, Cursor, or any compatible remote MCP client can connect.
 
 ---
 
-## Related
+## Security
 
-- [**antigravity-remote**](https://github.com/zz327455573/antigravity-remote) — native Android client with full-disk file transfer and resumable downloads.
-- [antigravity-desktop-zh-cn](https://github.com/zz327455573/antigravity-desktop-zh-cn) — Simplified Chinese localization pack for the desktop app.
-
----
-
-## 中文说明
-
-**这个项目解决的不是"再造一个遥控器"，而是"不要再造 UI"。**
-
-市面上 40 多个 Antigravity 手机遥控项目全都在自己写界面；这个项目反过来——把本地 Antigravity 封装成**标准远程 MCP 服务器**，让**你手机里现成的 Gemini 当界面**。于是"查资料 + 派任务 + 拉结果"能在同一个对话里完成，这是浏览器式遥控做不到的。
-
-### 三个关键点
-
-1. **手机端零安装**：不装 App、不加主屏幕，用你已有的 Gemini
-2. **走官方插槽**：接入的是 Google 2026-06 开放的自定义远程 MCP 连接器，不是逆向
-3. **不需要云电脑**：任何一台常开的 Windows 都行，家用台式机即可
-
-### 三步接入
-
-1. **电脑端**：`cd server` → `pip install -r requirements.txt` → 复制 `config.example.json` 为 `config.json`（改 `auth_token`、`workspace_roots`）→ 开着 Antigravity，跑 `python gateway.py`
-2. **公网 HTTPS**：`cloudflared tunnel --url http://127.0.0.1:18900` 快速试用；长期建议建命名隧道 `agy-remote` 挂自己域名（MCP 会记住地址，随机域名重启就失效）
-3. **接进 Gemini**：浏览器打开 `gemini.google.com` → 设置 → Connected Apps → 添加自定义 app → 填 `https://你的域名/mcp` → OAuth 页输入 `auth_token`。加完之后手机 Gemini 里也会出现
-
-### 9 个工具
-
-`list_projects` / `list_conversations` / `check_server_health` / `create_and_send_task` / `send_message` / `get_task_result` / `stop_task` / `list_files` / `read_file_snippet`
-
----
-
-## 🔒 Security
-
-- 切勿提交 `server/config.json`、`server/oauth_store.json`、真实域名或令牌。  
-  Never commit `server/config.json`, `server/oauth_store.json`, private domains, or tokens.
-- **远程自改保护**：不要让 Gemini 派发的远程会话修改或重启 `gateway.py` / `mcp_bridge.py`，否则会切断它自己的连接。  
-  **Self-modification guard**: a remote session that edits or restarts the bridge kills its own link.
+- Never commit `server/config.json`, `server/oauth_store.json`, real domains, public IPs, or tokens.
+- Keep `gateway.py` bound to `127.0.0.1` and expose it only through an HTTPS tunnel.
 
 ## License
 

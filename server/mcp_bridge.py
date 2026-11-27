@@ -24,7 +24,30 @@ ACCESS_TOKEN_TTL = 30 * 24 * 3600   # 30 天长效令牌（适配长耗时任务
 REFRESH_TOKEN_TTL = 180 * 24 * 3600  # 180 天刷新令牌
 AUTH_CODE_TTL = 300                  # 授权码 5 分钟有效
 
+MAX_TOTAL_WAIT_SEC = 25              # 单次 MCP 工具调用总耗时硬上限（秒），到点必交回执防断连
+DEDUP_TTL_SEC = 180                  # 任务指纹防重与断连续接 TTL（秒）
+
 DEFAULT_STATIC_CLIENT_ID = "agy-gemini-mcp"
+
+# 3 分钟内存级任务指纹缓存与并发锁（防断连重试重复派发）
+_RECENT_DISPATCHES: Dict[str, Dict[str, Any]] = {}
+_DISPATCH_LOCK = asyncio.Lock()
+
+
+def _make_dispatch_fingerprint(kind: str, scope: str, payload: str) -> str:
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return json.dumps((kind, scope, digest), ensure_ascii=False)
+
+
+def _cleanup_recent_dispatches(now: Optional[float] = None) -> None:
+    ts_now = time.monotonic() if now is None else now
+    expired = [
+        key
+        for key, rec in _RECENT_DISPATCHES.items()
+        if (ts_now - float(rec.get("ts", 0.0))) > DEDUP_TTL_SEC
+    ]
+    for key in expired:
+        _RECENT_DISPATCHES.pop(key, None)
 
 
 def _load_store() -> Dict[str, Any]:
@@ -82,7 +105,7 @@ def get_static_client_credentials() -> Dict[str, str]:
 
 def _get_base_url(request: Request) -> str:
     proto = request.headers.get("x-forwarded-proto") or request.url.scheme or "https"
-    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or "your-tunnel-domain.example.com"
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or "your-domain.example.com"
     # 公网通过 Cloudflare Tunnel 接入时强制 https
     if not host.startswith("127.0.0.1") and not host.startswith("localhost"):
         proto = "https"
@@ -127,6 +150,8 @@ def create_mcp_router(
     stop_task_fn: Callable[..., Dict[str, Any]],
     create_conv_req_cls: Any,
     send_msg_req_cls: Any,
+    create_project_fn: Optional[Callable[..., Dict[str, Any]]] = None,
+    create_project_req_cls: Any = None,
 ) -> APIRouter:
     router = APIRouter()
     _ensure_store()
@@ -490,15 +515,18 @@ def create_mcp_router(
         },
         {
             "name": "create_and_send_task",
-            "description": "Create a new Antigravity conversation and dispatch a task prompt asynchronously. Returns conversation_id immediately so long tasks (10-30+ min) never time out. Poll progress/result later using get_task_result.",
+            "description": "Create a new Antigravity conversation and dispatch a task prompt asynchronously. Total request duration is strictly capped at 25s and always returns a structured receipt if still running, so long tasks never trigger client disconnect. Retrying the exact same request within 180s automatically deduplicates and resumes the existing conversation without duplicate dispatch.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "prompt": {"type": "string", "description": "Detailed task instruction for Antigravity."},
                     "project_path": {"type": "string", "description": "Optional workspace folder path on the cloud PC (from list_projects)."},
                     "title": {"type": "string", "description": "Optional short title for the conversation."},
-                    "model": {"type": "string", "description": "Optional model ID."},
-                    "wait_seconds": {"type": "integer", "description": "Optional short-polling wait in seconds (0-50, default 0). For quick tasks (<50s), pass 45-50 to wait and return the final result in one call; for long tasks, leave 0."},
+                    "model": {
+                        "type": "string",
+                        "description": "Optional model tier or ID. Leave empty (or pass 'default') to auto-use the latest official default model. Pass 'fast' for small/quick tasks, or 'strong' for complex/heavy tasks. Do NOT guess model IDs.",
+                    },
+                    "wait_seconds": {"type": "integer", "description": "Optional short-polling wait in seconds (0-25, default 0). Total request duration (dispatch + polling) is strictly capped at 25s and always returns a receipt on deadline; retrying within 180s auto-claims the existing task without duplicate dispatch."},
                 },
                 "required": ["prompt"],
             },
@@ -506,14 +534,17 @@ def create_mcp_router(
         },
         {
             "name": "send_message",
-            "description": "Send a follow-up instruction to an existing Antigravity conversation. Optionally wait up to 50s (wait_seconds) for quick replies.",
+            "description": "Send a follow-up instruction to an existing Antigravity conversation. Optionally wait up to 25s total (wait_seconds, strictly capped at 25s with guaranteed receipt). Retrying the same message within 180s automatically deduplicates and resumes waiting without duplicate send.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "conversation_id": {"type": "string", "description": "Target conversation ID."},
                     "content": {"type": "string", "description": "Follow-up prompt or instruction."},
-                    "model": {"type": "string", "description": "Optional model ID."},
-                    "wait_seconds": {"type": "integer", "description": "Optional short-polling wait in seconds (0-50, default 0). Pass 45-50 for quick follow-ups."},
+                    "model": {
+                        "type": "string",
+                        "description": "Optional model tier ('default', 'fast', 'strong') or ID. Usually leave empty to keep the conversation's current model.",
+                    },
+                    "wait_seconds": {"type": "integer", "description": "Optional short-polling wait in seconds (0-25, default 0). Total request duration is strictly capped at 25s with guaranteed receipt; retrying within 180s auto-claims the existing follow-up without duplicate send."},
                 },
                 "required": ["conversation_id", "content"],
             },
@@ -521,14 +552,14 @@ def create_mcp_router(
         },
         {
             "name": "get_task_result",
-            "description": "Check live execution status (running vs idle/done) and read the latest output of an Antigravity conversation. Optionally wait up to 50s (wait_seconds) if still running.",
+            "description": "Check live execution status (running vs idle/done) and read the latest output of an Antigravity conversation. Optionally wait up to 25s total (wait_seconds, strictly capped at 25s with guaranteed structured receipt).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "conversation_id": {"type": "string", "description": "Target conversation ID."},
                     "offset": {"type": "integer", "description": "Character offset into the latest response for reading long outputs (default 0)."},
                     "max_chars": {"type": "integer", "description": "Max characters to return (default 12000)."},
-                    "wait_seconds": {"type": "integer", "description": "Optional short-polling wait in seconds (0-50, default 0) if the task is still running."},
+                    "wait_seconds": {"type": "integer", "description": "Optional short-polling wait in seconds (0-25, default 0) if the task is still running. Total request duration is strictly capped at 25s and always returns a structured receipt."},
                 },
                 "required": ["conversation_id"],
             },
@@ -583,6 +614,34 @@ def create_mcp_router(
             },
             "annotations": {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
         },
+        {
+            "name": "create_project",
+            "description": "Create a new project folder under workspace_roots (or specified root_path) on the cloud PC so you can dispatch tasks into it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "New project folder name."},
+                    "root_path": {"type": "string", "description": "Optional parent root directory path (defaults to primary workspace root)."},
+                },
+                "required": ["name"],
+            },
+            "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False},
+        },
+        {
+            "name": "search_in_files",
+            "description": "Fast read-only text/code search across files in a directory or single file on the cloud PC (case-insensitive).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Directory or file path to search."},
+                    "query": {"type": "string", "description": "Text keyword to search for (case-insensitive)."},
+                    "file_ext": {"type": "string", "description": "Optional file extension filter, e.g. '.py', '.kt', '.xml', '.md'."},
+                    "max_results": {"type": "integer", "description": "Max matches to return (default 30, max 80)."},
+                },
+                "required": ["path", "query"],
+            },
+            "annotations": {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
+        },
     ]
 
     def _build_task_result(cid: str, offset: int = 0, max_chars: int = 12000) -> Dict[str, Any]:
@@ -608,12 +667,14 @@ def create_mcp_router(
         total_len = len(latest_content)
         chunk = latest_content[offset : offset + max_chars]
         has_more = (offset + len(chunk)) < total_len
+        has_error = bool(assistant_msgs and assistant_msgs[-1].get("status") == "ERROR")
 
         return {
             "conversation_id": cid,
             "title": res.get("title", ""),
             "workspace": res.get("workspace", ""),
             "is_running": is_running,
+            "has_error": has_error,
             "raw_status": raw_status,
             "total_steps": len(msgs),
             "assistant_msg_count": len(assistant_msgs),
@@ -625,24 +686,89 @@ def create_mcp_router(
             "latest_response": chunk,
         }
 
+    async def _safe_snapshot(cid: str, offset: int = 0, max_chars: int = 12000) -> Dict[str, Any]:
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(_build_task_result, cid, offset, max_chars),
+                timeout=2.0,
+            )
+        except Exception:
+            return {
+                "conversation_id": cid,
+                "title": "",
+                "workspace": "",
+                "is_running": True,
+                "has_error": False,
+                "raw_status": "CASCADE_RUN_STATUS_RUNNING",
+                "total_steps": 0,
+                "assistant_msg_count": 0,
+                "last_updated": "",
+                "recent_tools": [],
+                "response_total_chars": 0,
+                "offset": offset,
+                "has_more": False,
+                "latest_response": "",
+            }
+
     async def _wait_for_result(
         cid: str,
-        wait_seconds: int,
+        wait_seconds: float,
         min_assistant_msgs: int = 1,
         offset: int = 0,
         max_chars: int = 12000,
+        initial_delay: float = 1.5,
     ) -> Dict[str, Any]:
-        capped = max(0, min(int(wait_seconds or 0), 50))
+        capped = max(0.0, min(float(wait_seconds or 0.0), float(MAX_TOTAL_WAIT_SEC)))
         deadline = time.monotonic() + capped
-        if capped > 0:
-            # 给本地引擎 1.5 秒启动状态切换窗口，避免刚派发就误判 IDLE
-            await asyncio.sleep(min(1.5, capped))
+        if capped > 0.0 and initial_delay > 0.0:
+            # 给本地引擎短暂启动状态切换窗口，避免刚派发就误判 IDLE
+            await asyncio.sleep(min(initial_delay, capped))
         while True:
-            result = await asyncio.to_thread(_build_task_result, cid, offset, max_chars)
-            done = (not result["is_running"]) and (result["assistant_msg_count"] >= min_assistant_msgs) and bool(result["latest_response"])
-            if done or time.monotonic() >= deadline:
+            result = await _safe_snapshot(cid, offset=offset, max_chars=max_chars)
+            done = (
+                (not result["is_running"])
+                and (result["assistant_msg_count"] >= min_assistant_msgs)
+                and bool(result["latest_response"])
+            )
+            left = deadline - time.monotonic()
+            if done or left <= 0.0:
                 return result
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(min(1.5, left))
+
+    def _finalize_polled_receipt(
+        polled: Dict[str, Any],
+        min_assistant_msgs: int,
+        req_start: float,
+        deduplicated: bool = False,
+        require_content: bool = True,
+    ) -> Dict[str, Any]:
+        is_completed = (
+            (not polled.get("is_running", False))
+            and (int(polled.get("assistant_msg_count") or 0) >= min_assistant_msgs)
+            and ((not require_content) or bool(polled.get("latest_response")))
+        )
+        polled["ok"] = True
+        polled["status"] = "completed" if is_completed else "running"
+        if deduplicated:
+            polled["deduplicated"] = True
+        if is_completed:
+            if deduplicated:
+                polled["note"] = (
+                    "命中 180 秒内相同任务指纹，已自动认领既有任务并返回最终结果（未重复派发）。"
+                )
+        else:
+            elapsed_s = round(time.monotonic() - req_start, 1)
+            if deduplicated:
+                polled["note"] = (
+                    f"命中 180 秒内相同任务指纹，已自动认领既有任务并续接进度（本次耗时 {elapsed_s}s / 上限 {MAX_TOTAL_WAIT_SEC}s，未重复派发）。"
+                    "任务仍在后台执行中，请稍后调用 get_task_result 查询最终结果。"
+                )
+            else:
+                polled["note"] = (
+                    f"已达单次请求安全等待上限（本次耗时 {elapsed_s}s / 上限 {MAX_TOTAL_WAIT_SEC}s），任务仍在后台执行中。"
+                    "请稍后调用 get_task_result 查询最终结果（180 秒内如因断连重试将自动认领当前任务，不会重复派发）。"
+                )
+        return polled
 
     async def _call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         if name == "list_projects":
@@ -659,71 +785,316 @@ def create_mcp_router(
             return {"conversations": res.get("conversations", [])[:limit]}
 
         if name == "create_and_send_task":
-            req = create_conv_req_cls(
-                prompt=str(args.get("prompt") or ""),
-                title=args.get("title"),
-                model=args.get("model"),
-                project_path=args.get("project_path"),
-            )
-            res = await asyncio.to_thread(create_conversation_fn, req, None)
-            cid = res.get("conversationId", "")
-            wait_sec = max(0, min(int(args.get("wait_seconds") or 0), 50))
-            if wait_sec > 0 and cid:
-                polled = await _wait_for_result(cid, wait_sec, min_assistant_msgs=1)
-                polled["ok"] = True
-                polled["status"] = "running" if polled["is_running"] else "completed"
-                if polled["is_running"]:
-                    polled["note"] = f"Still running after waiting {wait_sec}s. Call get_task_result later for final result."
-                return polled
+            req_start = time.monotonic()
+            orig_prompt = str(args.get("prompt") or "").strip()
+            proj_path = str(args.get("project_path") or "").strip()
+            fp_key = _make_dispatch_fingerprint("create", proj_path.strip().lower(), orig_prompt)
+            raw_prompt = orig_prompt
+            if proj_path and raw_prompt and not raw_prompt.startswith("[系统工作区约束"):
+                raw_prompt = (
+                    f"[系统工作区约束：所有文件读写、检索与终端命令必须在 {proj_path} 下执行，"
+                    f"禁止操作默认安装目录，无需单独回复确认，请直接执行以下任务] "
+                    + raw_prompt
+                )
+            wait_sec = max(0.0, min(float(args.get("wait_seconds") or 0), float(MAX_TOTAL_WAIT_SEC)))
+
+            cid = ""
+            deduplicated = False
+            for _attempt in range(2):
+                pending_event: Optional[asyncio.Event] = None
+                existing_rec: Optional[Dict[str, Any]] = None
+                own_entry: Optional[Dict[str, Any]] = None
+
+                async with _DISPATCH_LOCK:
+                    now_ts = time.monotonic()
+                    _cleanup_recent_dispatches(now_ts)
+                    existing = _RECENT_DISPATCHES.get(fp_key)
+                    if existing is not None:
+                        if existing.get("status") == "ready" and existing.get("cid"):
+                            cid = str(existing["cid"])
+                            deduplicated = True
+                            break
+                        if existing.get("status") == "pending":
+                            existing_rec = existing
+                            pending_event = existing.get("event")
+                    if existing_rec is None:
+                        own_entry = {
+                            "status": "pending",
+                            "ts": now_ts,
+                            "event": asyncio.Event(),
+                            "cid": "",
+                        }
+                        _RECENT_DISPATCHES[fp_key] = own_entry
+
+                if pending_event is not None and existing_rec is not None:
+                    wait_budget = max(0.0, float(MAX_TOTAL_WAIT_SEC) - (time.monotonic() - req_start))
+                    if wait_budget > 0.0:
+                        try:
+                            await asyncio.wait_for(pending_event.wait(), timeout=wait_budget)
+                        except asyncio.TimeoutError:
+                            pass
+                    if existing_rec.get("status") == "ready" and existing_rec.get("cid"):
+                        cid = str(existing_rec["cid"])
+                        deduplicated = True
+                        break
+                    if existing_rec.get("status") == "pending":
+                        return {
+                            "ok": True,
+                            "status": "running",
+                            "conversation_id": "",
+                            "is_running": True,
+                            "total_steps": 0,
+                            "recent_tools": [],
+                            "deduplicated": True,
+                            "note": (
+                                f"命中 180 秒内相同任务指纹，原派发请求仍在创建会话中（已达 {MAX_TOTAL_WAIT_SEC}s 安全上限，未重复派发）。"
+                                "请稍后重试原请求或调用 list_conversations 查询会话状态。"
+                            ),
+                        }
+                    # 原派发失败时允许当前请求重新尝试派发一次
+                    continue
+
+                req = create_conv_req_cls(
+                    prompt=raw_prompt,
+                    title=args.get("title"),
+                    model=args.get("model"),
+                    project_path=args.get("project_path"),
+                )
+                try:
+                    res = await asyncio.to_thread(create_conversation_fn, req, None)
+                    cid = str(res.get("conversationId") or "")
+                except Exception:
+                    async with _DISPATCH_LOCK:
+                        if own_entry is not None and _RECENT_DISPATCHES.get(fp_key) is own_entry:
+                            _RECENT_DISPATCHES.pop(fp_key, None)
+                        if own_entry is not None:
+                            own_entry["status"] = "failed"
+                            own_entry["event"].set()
+                    raise
+
+                async with _DISPATCH_LOCK:
+                    if own_entry is not None:
+                        if cid:
+                            own_entry["cid"] = cid
+                            own_entry["status"] = "ready"
+                            own_entry["ts"] = time.monotonic()
+                        else:
+                            if _RECENT_DISPATCHES.get(fp_key) is own_entry:
+                                _RECENT_DISPATCHES.pop(fp_key, None)
+                            own_entry["status"] = "failed"
+                        own_entry["event"].set()
+                break
+
+            if wait_sec > 0.0 and cid:
+                remaining = max(0.0, min(wait_sec, float(MAX_TOTAL_WAIT_SEC)) - (time.monotonic() - req_start))
+                if remaining > 0.0:
+                    polled = await _wait_for_result(
+                        cid,
+                        remaining,
+                        min_assistant_msgs=1,
+                        initial_delay=0.0 if deduplicated else 1.5,
+                    )
+                else:
+                    polled = await _safe_snapshot(cid)
+                return _finalize_polled_receipt(
+                    polled,
+                    min_assistant_msgs=1,
+                    req_start=req_start,
+                    deduplicated=deduplicated,
+                )
+
+            if deduplicated and cid:
+                polled = await _safe_snapshot(cid)
+                return _finalize_polled_receipt(
+                    polled,
+                    min_assistant_msgs=1,
+                    req_start=req_start,
+                    deduplicated=True,
+                )
+
             return {
                 "ok": True,
                 "status": "dispatched",
                 "conversation_id": cid,
-                "note": "Task dispatched asynchronously. Call get_task_result later (or pass wait_seconds<=50 for quick tasks).",
+                "note": (
+                    f"Task dispatched asynchronously. Call get_task_result later "
+                    f"(or pass wait_seconds<= {MAX_TOTAL_WAIT_SEC} for quick tasks; "
+                    f"retrying within {DEDUP_TTL_SEC}s auto-claims this task without duplicate dispatch)."
+                ),
             }
 
         if name == "send_message":
+            req_start = time.monotonic()
             cid = str(args.get("conversation_id") or "").strip()
             if not cid:
                 raise ValueError("conversation_id is required")
-            wait_sec = max(0, min(int(args.get("wait_seconds") or 0), 50))
+            content_raw = str(args.get("content") or "")
+            wait_sec = max(0.0, min(float(args.get("wait_seconds") or 0), float(MAX_TOTAL_WAIT_SEC)))
+            fp_key = _make_dispatch_fingerprint("send", cid, content_raw.strip())
+
             prev_count = 0
-            if wait_sec > 0:
+            method_name = ""
+            deduplicated = False
+            for _attempt in range(2):
+                pending_event = None
+                existing_rec = None
+                own_entry = None
+
+                async with _DISPATCH_LOCK:
+                    now_ts = time.monotonic()
+                    _cleanup_recent_dispatches(now_ts)
+                    existing = _RECENT_DISPATCHES.get(fp_key)
+                    if existing is not None:
+                        if existing.get("status") == "ready" and existing.get("cid"):
+                            prev_count = int(existing.get("prev_count") or 0)
+                            method_name = str(existing.get("method") or "")
+                            deduplicated = True
+                            break
+                        if existing.get("status") == "pending":
+                            existing_rec = existing
+                            pending_event = existing.get("event")
+                    if existing_rec is None:
+                        own_entry = {
+                            "status": "pending",
+                            "ts": now_ts,
+                            "event": asyncio.Event(),
+                            "cid": cid,
+                            "prev_count": 0,
+                            "method": "",
+                        }
+                        _RECENT_DISPATCHES[fp_key] = own_entry
+
+                if pending_event is not None and existing_rec is not None:
+                    wait_budget = max(0.0, float(MAX_TOTAL_WAIT_SEC) - (time.monotonic() - req_start))
+                    if wait_budget > 0.0:
+                        try:
+                            await asyncio.wait_for(pending_event.wait(), timeout=wait_budget)
+                        except asyncio.TimeoutError:
+                            pass
+                    if existing_rec.get("status") == "ready" and existing_rec.get("cid"):
+                        prev_count = int(existing_rec.get("prev_count") or 0)
+                        method_name = str(existing_rec.get("method") or "")
+                        deduplicated = True
+                        break
+                    if existing_rec.get("status") == "pending":
+                        snap = await _safe_snapshot(cid)
+                        snap["ok"] = True
+                        snap["status"] = "running"
+                        snap["deduplicated"] = True
+                        snap["note"] = (
+                            f"命中 180 秒内相同追问指纹，原消息仍在发送中（已达 {MAX_TOTAL_WAIT_SEC}s 安全上限，未重复发送）。"
+                            "请稍后调用 get_task_result 查询进度。"
+                        )
+                        return snap
+                    continue
+
                 try:
-                    prev_res = await asyncio.to_thread(_build_task_result, cid)
-                    prev_count = prev_res["assistant_msg_count"]
+                    try:
+                        prev_res = await asyncio.to_thread(_build_task_result, cid)
+                        prev_count = int(prev_res.get("assistant_msg_count") or 0)
+                    except Exception:
+                        prev_count = 0
+
+                    req = send_msg_req_cls(
+                        content=content_raw,
+                        model=args.get("model"),
+                    )
+                    res = await asyncio.to_thread(send_message_fn, cid, req, None)
+                    method_name = str(res.get("method") or "")
                 except Exception:
-                    prev_count = 0
-            req = send_msg_req_cls(
-                content=str(args.get("content") or ""),
-                model=args.get("model"),
-            )
-            res = await asyncio.to_thread(send_message_fn, cid, req, None)
-            if wait_sec > 0:
-                polled = await _wait_for_result(cid, wait_sec, min_assistant_msgs=prev_count + 1)
-                polled["ok"] = True
-                polled["status"] = "running" if polled["is_running"] else "completed"
-                if polled["is_running"]:
-                    polled["note"] = f"Still running after waiting {wait_sec}s. Call get_task_result later for final result."
-                return polled
+                    async with _DISPATCH_LOCK:
+                        if own_entry is not None and _RECENT_DISPATCHES.get(fp_key) is own_entry:
+                            _RECENT_DISPATCHES.pop(fp_key, None)
+                        if own_entry is not None:
+                            own_entry["status"] = "failed"
+                            own_entry["event"].set()
+                    raise
+
+                async with _DISPATCH_LOCK:
+                    if own_entry is not None:
+                        own_entry["cid"] = cid
+                        own_entry["prev_count"] = prev_count
+                        own_entry["method"] = method_name
+                        own_entry["status"] = "ready"
+                        own_entry["ts"] = time.monotonic()
+                        own_entry["event"].set()
+                break
+
+            if wait_sec > 0.0:
+                remaining = max(0.0, min(wait_sec, float(MAX_TOTAL_WAIT_SEC)) - (time.monotonic() - req_start))
+                if remaining > 0.0:
+                    polled = await _wait_for_result(
+                        cid,
+                        remaining,
+                        min_assistant_msgs=prev_count + 1,
+                        initial_delay=0.0 if deduplicated else 1.5,
+                    )
+                else:
+                    polled = await _safe_snapshot(cid)
+                return _finalize_polled_receipt(
+                    polled,
+                    min_assistant_msgs=prev_count + 1,
+                    req_start=req_start,
+                    deduplicated=deduplicated,
+                )
+
+            if deduplicated:
+                polled = await _safe_snapshot(cid)
+                return _finalize_polled_receipt(
+                    polled,
+                    min_assistant_msgs=prev_count + 1,
+                    req_start=req_start,
+                    deduplicated=True,
+                )
+
             return {
                 "ok": True,
                 "status": "dispatched",
                 "conversation_id": cid,
-                "method": res.get("method", ""),
-                "note": "Follow-up dispatched asynchronously. Call get_task_result later (or pass wait_seconds<=50 for quick tasks).",
+                "method": method_name,
+                "note": (
+                    f"Follow-up dispatched asynchronously. Call get_task_result later "
+                    f"(or pass wait_seconds<={MAX_TOTAL_WAIT_SEC} for quick tasks; "
+                    f"retrying within {DEDUP_TTL_SEC}s auto-claims this follow-up without duplicate send)."
+                ),
             }
 
         if name == "get_task_result":
+            req_start = time.monotonic()
             cid = str(args.get("conversation_id") or "").strip()
             if not cid:
                 raise ValueError("conversation_id is required")
             offset = max(0, int(args.get("offset") or 0))
             max_chars = max(500, min(int(args.get("max_chars") or 12000), 30000))
-            wait_sec = max(0, min(int(args.get("wait_seconds") or 0), 50))
-            if wait_sec > 0:
-                return await _wait_for_result(cid, wait_sec, min_assistant_msgs=1, offset=offset, max_chars=max_chars)
-            return await asyncio.to_thread(_build_task_result, cid, offset, max_chars)
+            wait_sec = max(0.0, min(float(args.get("wait_seconds") or 0), float(MAX_TOTAL_WAIT_SEC)))
+            if wait_sec > 0.0:
+                remaining = max(0.0, min(wait_sec, float(MAX_TOTAL_WAIT_SEC)) - (time.monotonic() - req_start))
+                if remaining > 0.0:
+                    polled = await _wait_for_result(
+                        cid,
+                        remaining,
+                        min_assistant_msgs=1,
+                        offset=offset,
+                        max_chars=max_chars,
+                        initial_delay=0.0,
+                    )
+                else:
+                    polled = await _safe_snapshot(cid, offset=offset, max_chars=max_chars)
+                polled["ok"] = True
+                polled["status"] = "running" if polled.get("is_running") else "completed"
+                if polled.get("is_running"):
+                    elapsed_s = round(time.monotonic() - req_start, 1)
+                    polled["note"] = (
+                        f"已达单次查询安全等待上限（本次耗时 {elapsed_s}s / 上限 {MAX_TOTAL_WAIT_SEC}s），任务仍在后台执行中。"
+                        "请稍后再次调用 get_task_result 查询最终结果。"
+                    )
+                return polled
+            res = await asyncio.to_thread(_build_task_result, cid, offset, max_chars)
+            res["ok"] = True
+            res["status"] = "running" if res.get("is_running") else "completed"
+            if res.get("is_running"):
+                res["note"] = "任务仍在后台执行中，请稍后再次调用 get_task_result 查询最终结果。"
+            return res
 
         if name == "list_files":
             p = str(args.get("path") or "").strip()
@@ -763,6 +1134,82 @@ def create_mcp_router(
                 raise ValueError("conversation_id is required")
             return stop_task_fn(cid=cid, _=None)
 
+        if name == "create_project":
+            if create_project_fn is None or create_project_req_cls is None:
+                raise ValueError("create_project is not enabled on this server")
+            proj_name = str(args.get("name") or "").strip()
+            if not proj_name:
+                raise ValueError("name is required")
+            root_path = args.get("root_path")
+            req = create_project_req_cls(name=proj_name, root_path=root_path)
+            return create_project_fn(req, None)
+
+        if name == "search_in_files":
+            target = Path(str(args.get("path") or "").strip())
+            query = str(args.get("query") or "").strip()
+            if not query:
+                raise ValueError("query is required")
+            if not target.exists():
+                raise ValueError(f"Path not found: {target}")
+            ext = str(args.get("file_ext") or "").strip().lower()
+            if ext and not ext.startswith("."):
+                ext = "." + ext
+            max_results = max(1, min(int(args.get("max_results") or 30), 80))
+
+            def _do_search() -> Dict[str, Any]:
+                skip_dirs = {".git", "node_modules", "__pycache__", "build", ".gradle", ".idea", "venv", ".venv"}
+                q_low = query.lower()
+                matches: List[Dict[str, Any]] = []
+                scanned_files = 0
+                truncated = False
+
+                files_iter = [target] if target.is_file() else []
+                if target.is_dir():
+                    for root, dirs, files in os.walk(target):
+                        dirs[:] = [d for d in dirs if d not in skip_dirs and not d.startswith(".git")]
+                        for fn in files:
+                            files_iter.append(Path(root) / fn)
+
+                for fp in files_iter:
+                    if ext and fp.suffix.lower() != ext:
+                        continue
+                    try:
+                        if fp.stat().st_size > 1024 * 1024:
+                            continue
+                    except OSError:
+                        continue
+                    scanned_files += 1
+                    try:
+                        with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                            for line_no, line in enumerate(f, 1):
+                                if q_low in line.lower():
+                                    matches.append({
+                                        "path": str(fp),
+                                        "line": line_no,
+                                        "text": line.strip()[:240],
+                                    })
+                                    if len(matches) >= max_results:
+                                        truncated = True
+                                        return {
+                                            "query": query,
+                                            "scanned_files": scanned_files,
+                                            "match_count": len(matches),
+                                            "truncated": truncated,
+                                            "matches": matches,
+                                        }
+                    except Exception:
+                        continue
+
+                return {
+                    "query": query,
+                    "scanned_files": scanned_files,
+                    "match_count": len(matches),
+                    "truncated": truncated,
+                    "matches": matches,
+                }
+
+            return await asyncio.to_thread(_do_search)
+
         raise ValueError(f"Unknown tool: {name}")
 
     # ---------- MCP Streamable HTTP Endpoint (/mcp) ----------
@@ -797,9 +1244,12 @@ def create_mcp_router(
                     "capabilities": {"tools": {"listChanged": False}},
                     "serverInfo": {"name": "antigravity-remote-mcp", "version": "1.0.0"},
                     "instructions": (
-                        "Antigravity Remote MCP Server. For quick tasks (<50s), pass wait_seconds=45 to "
-                        "create_and_send_task / send_message / get_task_result to get the result in one turn. "
-                        "For long tasks, leave wait_seconds=0 to return conversation_id immediately and poll later with get_task_result."
+                        "Antigravity Remote MCP Server. For quick tasks, pass wait_seconds (0-25) to "
+                        "create_and_send_task / send_message / get_task_result — total request duration is strictly capped at 25s "
+                        "and always returns a structured receipt if still running to prevent client timeouts. "
+                        "Retrying the same create_and_send_task or send_message within 180s automatically claims and resumes the existing task via fingerprint deduplication without duplicate dispatch. "
+                        "For long tasks, leave wait_seconds=0 to return conversation_id immediately and poll later with get_task_result. "
+                        "In create_and_send_task, leave model empty for the latest official default, or pass 'fast' / 'strong' based on task complexity."
                     ),
                 },
             }
